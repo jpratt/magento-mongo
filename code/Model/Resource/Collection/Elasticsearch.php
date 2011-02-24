@@ -3,8 +3,10 @@
 class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Resource_Collection_Abstract
 {
 
+  /** @var ElasticSearch_Query */
   protected $_search;
 
+  /** @var boolean */
   protected $_useSearch = FALSE;
 
   /**
@@ -52,14 +54,23 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
   }
 
   /**
-   * Get the mongo collection instance which is used as a query object
+   * @return ElasticSearch_Client
+   */
+  public function getSearchConnection()
+  {
+    return Mage::getSingleton('core/resource')->getConnection('elasticsearch_write');
+  }
+
+  /**
+   * Get an elasticsearch query object
    *
-   * @return Mongo_Collection
+   * @return ElasticSearch_Client
    */
   public function getSearch()
   {
     if( ! $this->_search) {
       $this->_search = $this->getSearchConnection()->getQuery();
+      $this->_search->search()->setType($this->getResource()->getCollectionName());
       $this->_useSearch = TRUE;
     }
     return $this->_search;
@@ -99,9 +110,13 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
     if( ! $this->_useSearch) {
       return parent::getAllIds($noLoad);
     }
-    $result = $this->_search->blah(); // @TODO
-    foreach($result as $key => $document) {
-      $ids[] = $document['_id'];
+    $this->_search->addData('fields', array());
+    $result = $this->getSearchConnection()->send($this->_search);
+    $ids = array();
+    if($result['hits']) {
+      foreach($result['hits']['hits'] as $hit) {
+        $ids[] = $hit['_id'];
+      }
     }
     return $ids;
   }

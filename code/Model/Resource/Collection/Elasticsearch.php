@@ -49,7 +49,8 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
     if($_condition !== NULL) {
       $condition = array($condition => $_condition);
     }
-    $this->addFilter($field, $condition);
+    $this->_filters[$field] = $condition;
+    $this->_isFiltersRendered = FALSE;
     return $this;
   }
 
@@ -62,9 +63,9 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
   }
 
   /**
-   * Get an elasticsearch query object
+   * Get an elasticsearch query object. Will force search to be used.
    *
-   * @return ElasticSearch_Client
+   * @return ElasticSearch_Query
    */
   public function getSearch()
   {
@@ -110,6 +111,13 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
     if( ! $this->_useSearch) {
       return parent::getAllIds($noLoad);
     }
+    $ids = $this->getAllIdsFromSearch();
+    return $this->castFieldValues('_id', $ids);
+  }
+
+  public function getAllIdsFromSearch()
+  {
+    $this->_renderQuery();
     $this->_search->addData('fields', array());
     $result = $this->getSearchConnection()->send($this->_search);
     $ids = array();
@@ -120,7 +128,7 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
     }
     return $ids;
   }
-
+  
   /**
    * Add cursor order
    *
@@ -145,15 +153,23 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
     {
       $this->_beforeLoad();
       $this->_renderQuery();
+      
+      // When using search, get all ids, search mongo by ids, then apply sort order to mongo result
       if($this->_useSearch) {
-        $ids = $this->getAllIds();
+        $ids = $this->getAllIdsFromSearch();
         if($ids) {
+          $sortIds = array_flip($ids);
+          $this->castFieldValues('_id', $ids);
           $this->_renderFields();
-          $this->_data = $this->_query->find(array('_id' => array('$in' => $ids)))->as_array(FALSE);
+          $data = $this->_query->find(array('_id' => array('$in' => $ids)))->as_array(FALSE);
+          array_multisort($sortIds, SORT_ASC, SORT_NUMERIC, $data);
+          $this->_data = $data;
         } else {
           $this->_data = array();
         }
-      } else {
+      }
+      // Not using search
+      else {
         $this->_data = $this->_query->as_array(FALSE);
       }
       $this->_afterLoadData();
@@ -175,6 +191,24 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
     return $this;
   }
 
+  /**
+   * Cast array of values to the proper type from a string
+   * 
+   * @param string $field
+   * @param array $values
+   */
+  public function castFieldValues($field, $values, $sourceIsString = TRUE)
+  {
+    $type = $this->getResource()->getFieldType('_id');
+    if($type == 'string' && $sourceIsString) {
+      return;
+    }
+    $convert = $this->getResource()->getPhpToMongoConverter();
+    foreach($values as &$value) {
+      $value = $convert->$type(NULL,$value);
+    }
+  }
+  
   /**
    * Build query condition. See docs for addFieldToFilter.
    *
@@ -381,13 +415,24 @@ class Cm_Mongo_Model_Resource_Collection_Elasticsearch extends Cm_Mongo_Model_Re
     }
 
     // Determine if search should be used
+    //   If sorting on a referenced field or ??
     if( ! $this->_useSearch) {
 
     }
 
     // Render the query using the appropriate database
     if($this->_useSearch) {
+      $this->getSearch();
       // Render query as elasticsearch
+      foreach($this->_filters as $field => $condition) {
+        $this->_search->addData($this->_getSearchCondition($field, $condition));
+      }
+      // Render orders
+      foreach($this->_orders as $field => $direction) {
+        $this->_search->addData($this->_getSearchOrder($field, $direction));
+      }
+      // Render limits
+      // @TODO
     }
     else {
       // Render query as mongo query
